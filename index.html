@@ -108,6 +108,11 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%}
 .sleep,.cnt{width:4.8em;font:inherit;text-align:center;border:1px solid transparent;background:transparent;color:inherit;border-radius:6px;padding:3px 4px;font-variant-numeric:tabular-nums}
 .sleep:hover,.sleep:focus,.cnt:hover,.cnt:focus{border-color:var(--line);background:var(--surface)}
 .sleep::placeholder,.cnt::placeholder{color:var(--muted);opacity:.55}
+.sleep{width:4.6em}
+small.dec{display:block;font-size:.7rem;color:var(--muted);line-height:1;margin-top:-1px;font-variant-numeric:tabular-nums}
+.stepper{flex-wrap:wrap}
+.stepper input.hm{width:3.6em;font-size:1.3rem}
+.stepper input.hm.low{color:var(--bad)}.stepper input.hm.good{color:var(--accent)}.stepper input.hm.high{color:var(--warn)}
 .sleep.low{color:var(--bad);font-weight:700}.sleep.good{color:var(--accent);font-weight:700}.sleep.high{color:var(--warn);font-weight:700}
 .cnt.ok{background:var(--p-green);font-weight:700}
 .note-in{font:inherit;font-size:.9rem;width:14em;border:1px solid transparent;background:transparent;color:inherit;border-radius:6px;padding:3px 6px}
@@ -355,7 +360,11 @@ dialog#settings::backdrop{background:rgba(10,20,8,.45)}
     <p class="hint">留空表示不设目标。进度显示在月度明细底部和今日打卡里。</p>
     <div class="goals" id="goalList"></div>
     <h3>其它</h3>
-    <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="chk" id="lockPast"> 🔒 锁定前天及更早的记录，防止误改（可逐条临时解锁）</label>
+    <label style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">🔒 自动锁定记录，防止误改：
+      <select id="lockMode" style="font:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:var(--surface);color:var(--ink)">
+        <option value="today">今天以前的都锁定（推荐）</option><option value="yesterday">前天及更早的锁定（昨天仍可补记）</option><option value="off">不锁定</option>
+      </select></label>
+    <p class="hint">锁定的日子点 🔒 可临时解锁，3 分钟内不再修改会自动重新锁定。</p>
     <h3>🗑️ 删除记录</h3>
     <p class="hint">单天记录可以在月度明细每行日期旁的 🗑️、或今日打卡页底部删除；筛选后也可以一次删除筛选结果。所有删除都能用「撤销」恢复，数据文件夹的「历史备份」里也保留着每天的副本。</p>
     <div class="delzone">
@@ -381,14 +390,14 @@ const WEEK=["周日","周一","周二","周三","周四","周五","周六"];
 const DEFAULT_HABITS=[["read","阅读","📖"],["meditate","冥想","🧘"],["english","英语","🔤"],["squat","深蹲","🏋️"],["pushup","俯卧撑","💪"],["bridge","臀桥","🍑"],["tiptoe","踮脚","🦶"]]
   .map(([id,name,icon])=>({id,name,icon,type:"check",unit:"",target:1,step:1,freq:"daily",times:3,from:"2000-01-01",to:null}));
 const COLORS=[["green","绿"],["lime","浅绿"],["blue","蓝"],["yellow","黄"],["orange","橙"],["red","红"],["","灰"]];
-function defaultCfg(){return {habits:DEFAULT_HABITS.map(h=>({...h})),metrics:[],options:{},goals:{},lockPast:true,u:0}}
+function defaultCfg(){return {habits:DEFAULT_HABITS.map(h=>({...h})),metrics:[],options:{},goals:{},lockMode:"today",u:0}}
 function O(f){const o=cfg.options&&cfg.options[f];return Array.isArray(o)&&o.length?o:DEF_OPTS[f]}
 function normCfg(c){
   const d=defaultCfg();if(!c||!Array.isArray(c.habits))return d;
   return {habits:c.habits.map(h=>({type:"check",unit:"",target:1,step:1,freq:"daily",times:3,from:"2000-01-01",to:null,icon:"⭐",...h})),
     metrics:Array.isArray(c.metrics)?c.metrics.map(m=>({icon:"📏",unit:"",dec:1,to:null,...m})):[],
     options:c.options&&typeof c.options==="object"?c.options:{},
-    goals:c.goals&&typeof c.goals==="object"?c.goals:{},lockPast:c.lockPast!==false,u:c.u||0};
+    goals:c.goals&&typeof c.goals==="object"?c.goals:{},lockMode:["today","yesterday","off"].includes(c.lockMode)?c.lockMode:(c.lockPast===false?"off":"today"),u:c.u||0};
 }
 
 // ================= state =================
@@ -441,7 +450,23 @@ function optIdx(field,v){return O(field).findIndex(x=>x[0]===v)}
 function moodScore(v){const o=O("mood"),i=optIdx("mood",v);if(i<0)return null;return o.length<2?5:1+4*(o.length-1-i)/(o.length-1)}
 function isTop(field,v,n){const i=optIdx(field,v);return i>=0&&i<n}
 function sleepCls(v){const x=parseFloat(v);if(isNaN(x))return "";return x<6?" low":x>9.5?" high":x>=7?" good":""}
-function locked(k){return ro||(cfg.lockPast&&k<yKey&&!unlocked.has(k))}
+// dates before this key are locked: "today" = everything before today, "yesterday" = before yesterday
+function lockCut(){return cfg.lockMode==="off"?null:cfg.lockMode==="yesterday"?yKey:todayKey}
+function lockable(k){const c=lockCut();return c!==null&&k<c}
+function locked(k){return ro||(lockable(k)&&!unlocked.has(k))}
+// ---- sleep: stored as decimal hours, entered and shown as hours:minutes ----
+function fmtHM(v){const x=parseFloat(v);if(isNaN(x))return "";let h=Math.floor(x),m=Math.round((x-h)*60);if(m===60){h++;m=0}return h+":"+pad(m)}
+function toHours(h,m){return Math.round((h+m/60)*100)/100}
+function parseSleep(str){
+  let s=String(str==null?"":str).trim().replace(/：/g,":").replace(/\s+/g," ");
+  if(!s)return {v:""};
+  let m=s.match(/^(\d{1,2})\s*(?::|h|小时|时)\s*(\d{1,2})?\s*(?:m|min|分钟|分)?$/i)||s.match(/^(\d{1,2}) (\d{1,2})$/);
+  if(m){const h=+m[1],mi=m[2]?+m[2]:0;if(mi>59)return {err:"分钟不能超过 59"};if(h+mi/60>24)return {err:"不能超过 24 小时"};return {v:toHours(h,mi)}}
+  m=s.match(/^(\d{1,3})\s*(?:m|min|分钟|分)$/i);
+  if(m){const mi=+m[1];if(mi>1440)return {err:"不能超过 24 小时"};return {v:toHours(0,mi)}}
+  if(/^\d+(\.\d+)?$/.test(s)){const x=parseFloat(s);if(x>24)return {err:"不能超过 24 小时"};return {v:Math.round(x*100)/100}}
+  return {err:"格式不对，请输入如 7:30"};
+}
 function rec(k){if(!data[k])data[k]={habits:{}};if(!data[k].habits)data[k].habits={};return data[k]}
 // ---- undo ----
 const undoStack=[];
@@ -627,7 +652,7 @@ function renderMonth(){
     }
     h+=`</tbody><tfoot>${footHTML(hs,n,ms)}</tfoot></table></div>
     <p class="note">睡眠时长 <span style="color:var(--accent);font-weight:700">7–9.5h 绿色</span>，不足 6h 红色，超过 9.5h 橙色。
-    每日完成率 = 睡眠评分、饮水、饮食三项 + 每日习惯；休息日和数据指标不计入。每周日下方可以写周复盘。${cfg.lockPast?"前天及更早的记录已锁定，点 🔒 可临时解锁。":""}</p>`;
+    每日完成率 = 睡眠评分、饮水、饮食三项 + 每日习惯；休息日和数据指标不计入。每周日下方可以写周复盘。${cfg.lockMode!=="off"?`${cfg.lockMode==="yesterday"?"前天":"昨天"}及更早的记录已自动锁定，点 🔒 可临时解锁，3 分钟不操作会重新锁定。`:""}</p>`;
   }
   document.getElementById("main").innerHTML=h;
 }
@@ -637,7 +662,7 @@ function rowHTML(k,hs,o,ms){
   const v=rate(k,data[k]);
   const mcells=ms.map(m=>`<td><input class="cnt" type="number" step="any" inputmode="decimal" data-m="${m.id}" value="${mv(r,m)===null?"":esc(r.m[m.id])}" placeholder="–" ${dis} aria-label="${esc(m.name)}"></td>`).join("");
   const cls=[o.alt?"alt":"",o.weekstart?"weekstart":"",k===todayKey?"today":"",r.rest?"rest":"",lk?"locked":""].filter(Boolean).join(" ");
-  const lockBtn=!ro&&cfg.lockPast&&k<yKey?`<button class="lockb" data-act="lock" title="${lk?"解锁编辑":"重新锁定"}" aria-label="${lk?"解锁编辑":"重新锁定"}">${lk?"🔒":"🔓"}</button>`:"";
+  const lockBtn=!ro&&lockable(k)?`<button class="lockb" data-act="lock" title="${lk?"解锁编辑":"重新锁定"}" aria-label="${lk?"解锁编辑":"重新锁定"}">${lk?"🔒":"🔓"}</button>`:"";
   const cells=hs.map(h=>{
     if(!habitsOn(k).includes(h))return '<td class="na" title="当时未设置该习惯">·</td>';
     const val=hv(r,h);
@@ -651,7 +676,7 @@ function rowHTML(k,hs,o,ms){
   return `<tr data-k="${k}" class="${cls}">
     <td class="sticky num"><span class="datec">${k}${lockBtn}${!lk&&touched(data[k])?`<button class="delb${delDay===k?" armed":""}" data-act="del" title="${delDay===k?"再点一次确认删除":"删除这一天的记录"}" aria-label="删除这一天的记录">${delDay===k?"确认删除？":"🗑️"}</button>`:""}</span></td>
     <td>第${weekNo(k)}周</td><td>${WEEK[d.getDay()]}</td>
-    <td><input class="sleep${sleepCls(r.sleep)}" type="number" step="0.1" min="0" max="24" inputmode="decimal" data-f="sleep" value="${r.sleep!=null&&r.sleep!==""?esc(r.sleep):""}" placeholder="–" ${dis} aria-label="睡眠时长"></td>
+    <td><input class="sleep${sleepCls(r.sleep)}" type="text" inputmode="text" data-f="sleep" value="${esc(fmtHM(r.sleep))}" placeholder="时:分" ${dis} aria-label="睡眠时长（时:分）" title="输入如 7:30，会自动换算为小时">${r.sleep!==""&&r.sleep!=null?`<small class="dec">${+Number(r.sleep).toFixed(2)}h</small>`:""}</td>
     <td>${selectHTML("sleepScore",r.sleepScore,dis)}</td>
     <td>${selectHTML("water",r.water,dis)}</td>
     <td>${selectHTML("food",r.food,dis,true)}</td>
@@ -732,9 +757,11 @@ function renderToday(){
     <div class="tprog"><span class="big">${r.rest?"🏖️":v===null?"0%":pct(v)}</span><div class="track"><i style="width:${r.rest?0:Math.round((v||0)*100)}%"></i></div></div>
     <label class="resttog"><input type="checkbox" class="chk restc" data-f="rest" ${r.rest?"checked":""} ${dis}> 🏖️ 休息日（生病、出差等），不计入完成率，也不会中断连续打卡</label>
     <div class="tsec"><h3>🛌 睡眠时长</h3>
-      <div class="stepper"><button class="circ" data-inc="sleep" data-d="-0.5" ${dis} aria-label="减少半小时">−</button>
-      <input class="${sleepCls(r.sleep).trim()}" type="number" step="0.1" min="0" max="24" inputmode="decimal" data-f="sleep" value="${r.sleep!=null&&r.sleep!==""?esc(r.sleep):""}" placeholder="7.5" ${dis} aria-label="睡眠时长">
-      <button class="circ" data-inc="sleep" data-d="0.5" ${dis} aria-label="增加半小时">＋</button><span class="muted">小时</span></div></div>
+      <div class="stepper"><button class="circ" data-inc="sleep" data-d="-0.25" ${dis} aria-label="减少 15 分钟">−</button>
+      <input class="hm${sleepCls(r.sleep)}" type="number" min="0" max="24" step="1" inputmode="numeric" data-f="sleepH" value="${r.sleep!==""&&r.sleep!=null?fmtHM(r.sleep).split(":")[0]:""}" placeholder="7" ${dis} aria-label="小时"><span>小时</span>
+      <input class="hm${sleepCls(r.sleep)}" type="number" min="0" max="59" step="5" inputmode="numeric" data-f="sleepM" value="${r.sleep!==""&&r.sleep!=null?+fmtHM(r.sleep).split(":")[1]:""}" placeholder="30" ${dis} aria-label="分钟"><span>分</span>
+      <button class="circ" data-inc="sleep" data-d="0.25" ${dis} aria-label="增加 15 分钟">＋</button>
+      ${r.sleep!==""&&r.sleep!=null?`<span class="muted">= ${+Number(r.sleep).toFixed(2)} 小时</span>`:""}</div></div>
     <div class="tsec"><h3>🌙 睡眠评分</h3>${segHTML("sleepScore",r,dis)}</div>
     <div class="tsec"><h3>💧 饮水</h3>${segHTML("water",r,dis)}</div>
     <div class="tsec"><h3>🥗 饮食</h3>${segHTML("food",r,dis)}</div>
@@ -925,7 +952,10 @@ function render(){
 const main=document.getElementById("main");
 function mdLabel(k){return `${+k.slice(5,7)}/${+k.slice(8)}`}
 function beginDay(k,label){snapDay(k,`${mdLabel(k)} ${label}`)}
-function edited(k){markDay(k);queue();render()}
+function edited(k){markDay(k);if(unlocked.has(k))armRelock(k);queue();render()}
+// a temporarily unlocked day locks itself again after 3 minutes without edits
+const relockT={};
+function armRelock(k){clearTimeout(relockT[k]);relockT[k]=setTimeout(()=>{if(unlocked.has(k)&&lockable(k)){unlocked.delete(k);softRender()}},180000)}
 main.addEventListener("input",e=>{
   const t=e.target;
   if(t.dataset.flt==="q"){flt.q=t.value;clearTimeout(main._ft);main._ft=setTimeout(render,220)}
@@ -949,7 +979,12 @@ main.addEventListener("change",e=>{
     const v=parseFloat(t.value);if(t.value===""||isNaN(v))delete r.m[m.id];else r.m[m.id]=v;
   }else if(t.dataset.f){
     const f=t.dataset.f;beginDay(k,{sleep:"睡眠时长",rest:"休息日",note:"备注"}[f]||FIELD_NAME[f]||f);const r=rec(k);
-    if(f==="sleep"){const v=parseFloat(t.value);r.sleep=t.value===""||isNaN(v)?"":Math.round(Math.min(24,Math.max(0,v))*10)/10}
+    if(f==="sleep"){const res=parseSleep(t.value);if(res.err){undoStack.pop();undoUI();setSave("⚠️ 睡眠时长"+res.err);render();return}r.sleep=res.v}
+    else if(f==="sleepH"||f==="sleepM"){
+      const card=t.closest("[data-k]"),hv2=card.querySelector('[data-f="sleepH"]').value,mv2=card.querySelector('[data-f="sleepM"]').value;
+      if(hv2===""&&mv2==="")r.sleep="";
+      else{let h=Math.max(0,Math.floor(Number(hv2)||0)),m=Math.max(0,Math.round(Number(mv2)||0));if(m>59){h+=Math.floor(m/60);m%=60}if(h+m/60>24){h=24;m=0}r.sleep=toHours(h,m)}
+    }
     else if(f==="rest")r.rest=t.checked;
     else if(f==="note")r.note=t.value.slice(0,500);
     else r[f]=t.value;
@@ -977,7 +1012,7 @@ main.addEventListener("click",e=>{
   if(b.dataset.t!==undefined){const d=+b.dataset.t;tDate=d===0?todayKey:addDays(tDate,d);render();return}
   const host=b.closest("[data-k]");if(!host)return;
   const k=host.dataset.k;
-  if(b.dataset.act==="lock"){if(ro)return;unlocked.has(k)?unlocked.delete(k):unlocked.add(k);render();return}
+  if(b.dataset.act==="lock"){if(ro)return;if(unlocked.has(k)){unlocked.delete(k);clearTimeout(relockT[k])}else{unlocked.add(k);armRelock(k)}render();return}
   if(locked(k))return;
   if(b.dataset.act==="del"){
     if(delDay!==k){delDay=k;armTimer();render();return}
@@ -988,7 +1023,7 @@ main.addEventListener("click",e=>{
   if(b.dataset.toggle){const h=cfg.habits.find(x=>x.id===b.dataset.toggle);beginDay(k,h?h.name:"打卡");const r=rec(k);r.habits[b.dataset.toggle]=!r.habits[b.dataset.toggle];edited(k);return}
   if(b.dataset.inc){
     const d=parseFloat(b.dataset.d);
-    if(b.dataset.inc==="sleep"){beginDay(k,"睡眠时长");const r=rec(k);const cur=parseFloat(r.sleep);r.sleep=Math.round(Math.min(24,Math.max(0,(isNaN(cur)?7:cur)+(isNaN(cur)?0:d)))*10)/10}
+    if(b.dataset.inc==="sleep"){beginDay(k,"睡眠时长");const r=rec(k);const cur=parseFloat(r.sleep);const mins=Math.round((isNaN(cur)?7:cur)*60)+(isNaN(cur)?0:Math.round(d*60));r.sleep=toHours(0,Math.min(1440,Math.max(0,Math.round(mins/15)*15)))}
     else{const h=cfg.habits.find(x=>x.id===b.dataset.inc);if(!h)return;beginDay(k,h.name);const r=rec(k);const cur=r.habits[h.id]===true?Number(h.target):(Number(r.habits[h.id])||0);r.habits[h.id]=Math.max(0,Math.round((cur+d)*100)/100)}
     edited(k);
   }
@@ -1102,7 +1137,7 @@ function renderSettings(){
   document.getElementById("goalMonth").textContent=`${y}年${m+1}月`;
   const g=cfg.goals[ym(y,m)]||{};
   document.getElementById("goalList").innerHTML=activeHabits().map(h=>`<label class="goal">${esc(h.icon)} ${esc(h.name)} <input type="number" min="0" max="31" data-goal="${h.id}" value="${g[h.id]||""}" placeholder="–"> 天</label>`).join("")||'<span class="muted">没有启用中的习惯</span>';
-  document.getElementById("lockPast").checked=cfg.lockPast;
+  document.getElementById("lockMode").value=cfg.lockMode;
   if(ro)dlg.querySelectorAll(".dlg input,.dlg select,.dlg button:not(#closeSet):not([data-of])").forEach(el=>{el.disabled=true});
 }
 function cfgChanged(re){markCfg();queue();if(re)renderSettings();render()}
@@ -1114,7 +1149,7 @@ function ensureOpts(f){if(!cfg.options[f]||!cfg.options[f].length)cfg.options={.
 dlg.addEventListener("change",e=>{
   if(ro)return;
   const t=e.target;
-  if(t.id==="lockPast"){cfgEdit("锁定");cfg.lockPast=t.checked;unlocked.clear();cfgChanged(false);return}
+  if(t.id==="lockMode"){cfgEdit("锁定");cfg.lockMode=t.value;unlocked.clear();cfgChanged(false);return}
   if(t.dataset.goal){cfgEdit("月度目标");const [y,m]=goalYM(),k2=ym(y,m);const g={...(cfg.goals[k2]||{})};const v=parseInt(t.value,10);if(v>0)g[t.dataset.goal]=Math.min(31,v);else delete g[t.dataset.goal];cfg.goals={...cfg.goals,[k2]:g};cfgChanged(false);return}
   if(t.dataset.of2){
     const i=+t.closest("[data-oi]").dataset.oi;
@@ -1254,9 +1289,9 @@ document.getElementById("expXlsx").onclick=()=>{
   const wb=XLSX.utils.book_new();
   ys.forEach(y=>{
     const hs=habitsIn(`${y}-01-01`,`${y}-12-31`),ms=cfg.metrics;
-    const cols=["日期","周次","星期","睡眠时长(h)","睡眠评分","饮水等级","饮食评级",...hs.map(habitCol),...ms.map(metricCol),"当日完成率","今日状态/心情","备注","休息日"];
+    const cols=["日期","周次","星期","睡眠(时:分)","睡眠时长(h)","睡眠评分","饮水等级","饮食评级",...hs.map(habitCol),...ms.map(metricCol),"当日完成率","今日状态/心情","备注","休息日"];
     const rows=years[y].map(k=>{const r=recs[k],d=parseK(k),v=rate(k,r);
-      return [k,"第"+weekNo(k)+"周",WEEK[d.getDay()],r.sleep===""||r.sleep==null?"":Number(r.sleep),r.sleepScore||"",r.water||"",r.food||"",
+      return [k,"第"+weekNo(k)+"周",WEEK[d.getDay()],fmtHM(r.sleep),r.sleep===""||r.sleep==null?"":Number(r.sleep),r.sleepScore||"",r.water||"",r.food||"",
         ...hs.map(h=>{const x=hv(r,h);if(h.type==="count")return x===true?h.target:(x?Number(x):"");return x?"✓":""}),
         ...ms.map(m=>mv(r,m)===null?"":mv(r,m)),
         v===null?"":Math.round(v*1000)/10+"%",r.mood||"",r.note||"",r.rest?"是":""]});
@@ -1275,7 +1310,7 @@ function normDate(v){
 function fromRow(o){
   const k=normDate(o["日期"]);if(!k)return null;
   const chk=v=>v===true||/^(✓|√|✔|true|1|是|yes)$/i.test(String(v==null?"":v).trim());
-  const sl=parseFloat(o["睡眠时长(h)"]);
+  let sl=parseFloat(o["睡眠时长(h)"]);if(isNaN(sl)&&o["睡眠(时:分)"]){const ps=parseSleep(o["睡眠(时:分)"]);if(!ps.err&&ps.v!=="")sl=ps.v}
   const habits={},mm={};
   cfg.habits.forEach(h=>{
     const col=[habitCol(h),`${h.name}打卡`,`${h.name}(${h.unit||"次"})`,h.name].find(c=>c in o);if(!col)return;
@@ -1284,7 +1319,7 @@ function fromRow(o){
     else if(chk(val)||parseFloat(val)>0)habits[h.id]=true;
   });
   cfg.metrics.forEach(m=>{const col=[metricCol(m),m.name].find(c=>c in o);if(!col)return;const n=parseFloat(o[col]);if(!isNaN(n))mm[m.id]=n});
-  return [k,{sleep:isNaN(sl)?"":Math.round(sl*10)/10,sleepScore:String(o["睡眠评分"]||""),water:String(o["饮水等级"]||""),food:String(o["饮食评级"]||""),
+  return [k,{sleep:isNaN(sl)?"":Math.round(sl*100)/100,sleepScore:String(o["睡眠评分"]||""),water:String(o["饮水等级"]||""),food:String(o["饮食评级"]||""),
     habits,m:mm,mood:String(o["今日状态/心情"]||""),note:String(o["备注"]||""),rest:chk(o["休息日"])}];
 }
 let staged=null;
